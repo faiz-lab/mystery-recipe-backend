@@ -14,8 +14,8 @@ app.add_middleware(
 )
 
 # 注册路由
-app.include_router(recipe.router, prefix="/recipe")
-app.include_router(ingredients.router, prefix="/ingredients")
+app.include_router(recipe.router)
+app.include_router(ingredients.router)
 
 @app.get("/")
 def read_root():
