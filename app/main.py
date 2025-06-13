@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import recipe, ingredients
+from app.routers import recipe
 
 app = FastAPI()
 
@@ -15,7 +15,6 @@ app.add_middleware(
 
 # 注册路由
 app.include_router(recipe.router)
-app.include_router(ingredients.router)
 
 @app.get("/")
 def read_root():
