@@ -74,3 +74,59 @@ FastAPI の router 層がリクエストデータを受け取り、推薦ロジ�
   "recommend_reason": "おすすめのレシピを見つけました！"
 }
 ```
+---
+
+### 7️⃣ フィルタリング処理の具体例
+
+**ユーザーの入力条件:**
+
+- 利用可能食材（available_ingredients）: 
+  ["キャベツ", "じゃがいも", "にんじん", "鶏肉"]
+- 必須食材（required_ingredients）: 
+  ["鶏肉"]
+- 最大調理時間（max_cooking_time）: 30分
+
+
+**これらの食材名は全て `ingredient_master` から `ingredient_id` に変換済みとします:**
+
+* available\_ids:
+
+```json
+["A", "B", "C", "D"]
+```
+
+（例：A = キャベツ、B = じゃがいも、C = にんじん、D = 鶏肉）
+
+* required\_ids:
+
+```json
+["D"]
+```
+
+**データベース内の3つのレシピ:**
+
+**レシピ1: 野菜スープ**
+- ingredients.ingredient_id = ["A", "B", "C"]
+- cooking_time = 20分
+
+**レシピ2: 鶏肉シチュー**
+- ingredients.ingredient_id = ["A", "B", "D"]
+- cooking_time = 25分
+
+**レシピ3: ビーフカレー**
+- ingredients.ingredient_id = ["A", "E", "F"]
+- cooking_time = 35分
+
+**フィルタリング条件ごとの判定:**
+
+| レシピ | $setIsSubset (食材全て冷蔵庫にあるか) | 必須食材含有 | 調理時間 | 結果 |
+| --- | --- | --- | --- | --- |
+| 野菜スープ | ✅ | ❌ | ✅ | ❌ |
+| 鶏肉シチュー | ✅ | ✅ | ✅ | ✅ |
+| ビーフカレー | ❌ | ❌ | ❌ | ❌ |
+
+---
+
+**最終的に推薦候補となるレシピは「鶏肉シチュー」のみ。**
+
+その後 `$sample` により、（候補が複数ある場合は）ランダムで1件抽出されます。
