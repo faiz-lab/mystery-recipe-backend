@@ -1,6 +1,20 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime
+from bson import ObjectId
+
+class PyObjectId(ObjectId):
+    @classmethod
+    def __get_validators__(cls):
+        yield cls.validate
+
+    @classmethod
+    def validate(cls, v):
+        if isinstance(v, ObjectId):
+            return str(v)
+        if isinstance(v, str):
+            return v
+        raise TypeError("Invalid ObjectId")
 
 # ---------- 嵌套子对象 ----------
 
@@ -16,7 +30,7 @@ class StepItem(BaseModel):
 # ---------- 内部存储模型 ----------
 
 class RecipeSchema(BaseModel):
-    id: Optional[str] = Field(default=None, alias="_id")
+    id: PyObjectId = Field(alias="_id")
     name: str
     description: Optional[str] = None
     image_url: Optional[str] = None
@@ -30,6 +44,9 @@ class RecipeSchema(BaseModel):
     generated_by: str
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+    class Config:
+        json_encoders = {ObjectId: str}
 
 # ---------- 推荐接口响应模型 ----------
 

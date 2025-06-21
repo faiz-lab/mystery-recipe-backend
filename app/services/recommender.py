@@ -1,14 +1,7 @@
 from typing import List, Optional
-from pymongo import MongoClient
-from bson import ObjectId
-from app.schemas.recipe_schema import RecipeSchema
-from app.schemas.recipe_schema import (
-    IngredientItem,
-    StepItem,
-    RecipeRecommendationResponse,
-)
+from app.schemas.recipe_schema import IngredientItem, StepItem, RecipeRecommendationResponse
 from app.core.db import get_collection
-
+from app.core.utils import convert_mongo_id
 
 class RecipeRecommender:
     def __init__(self):
@@ -16,9 +9,10 @@ class RecipeRecommender:
         self.ingredient_col = get_collection("ingredient_master")
 
     async def name_to_ids(self, names: List[str]) -> List[str]:
-        cursor = self.ingredient_col.find(
-            {"$or": [{"standard_name": {"$in": names}}, {"synonyms": {"$in": names}}]}
-        )
+        cursor = self.ingredient_col.find({"$or": [
+            {"standard_name": {"$in": names}},
+            {"synonyms": {"$in": names}}
+        ]})
         results = await cursor.to_list(length=None)
         return [str(r["_id"]) for r in results]
 
@@ -33,16 +27,12 @@ class RecipeRecommender:
 
         # 使用 MongoDB aggregation + $sample 实现高效随机推荐
         pipeline = [
-            {
-                "$match": {
-                    "ingredients.ingredient_id": {
-                        "$not": {"$elemMatch": {"$nin": available_ids}}
-                    },
-                    "ingredients.ingredient_id": {"$all": required_ids},
-                    "cooking_time": {"$lte": max_cooking_time},
-                }
-            },
-            {"$sample": {"size": 1}},
+            {"$match": {
+                "ingredients.ingredient_id": {"$not": {"$elemMatch": {"$nin": available_ids}}},
+                "ingredients.ingredient_id": {"$all": required_ids},
+                "cooking_time": {"$lte": max_cooking_time},
+            }},
+            {"$sample": {"size": 1}}
         ]
 
         cursor = await self.recipe_col.aggregate(pipeline)
@@ -51,8 +41,7 @@ class RecipeRecommender:
         if not result:
             return None
 
-        selected = result[0]
-        selected["_id"] = str(selected["_id"])
+        selected = convert_mongo_id(result[0])
 
         ingredient_items = [IngredientItem(**ing) for ing in selected["ingredients"]]
         step_items = [StepItem(**step) for step in selected["steps"]]
@@ -63,6 +52,6 @@ class RecipeRecommender:
             steps=step_items,
             missing_ingredients=[],
             recommend_score=1.0,
-            recommend_reason="おすすめのレシピを見つけました！",
+            recommend_reason="おすすめのレシピを見つけました！"
         )
         return response
