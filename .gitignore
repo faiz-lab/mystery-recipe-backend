@@ -13,3 +13,4 @@ wheels/
 .idea/
 # VS Code settings
 .vscode/
+.env
