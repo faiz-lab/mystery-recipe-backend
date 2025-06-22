@@ -2,6 +2,7 @@
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import recipe_router
+from app.routers import ingredient_router
 
 app = FastAPI()
 
@@ -32,6 +33,7 @@ async def add_standard_headers(request: Request, call_next):
     return response
 
 app.include_router(recipe_router.router)
+app.include_router(ingredient_router.router)
 
 @app.get("/")
 def read_root():
