@@ -1,7 +1,12 @@
 import pprint
 from typing import List, Optional
-from app.schemas.recipe_schema import IngredientItem, StepItem, RecipeRecommendationResponse
+from app.schemas.recipe_schema import (
+    IngredientItem,
+    StepItem,
+    RecipeRecommendationResponse,
+)
 from app.core.db import get_collection
+
 
 class RecipeRecommender:
     def __init__(self, recipe_col=None):
@@ -15,18 +20,27 @@ class RecipeRecommender:
     ) -> Optional[RecipeRecommendationResponse]:
 
         print("[RecommendRequest]")
-        pprint.pprint({
-            "available_codes": available_ingredients,
-            "required_codes": required_ingredients
-        })
+        pprint.pprint(
+            {
+                "available_codes": available_ingredients,
+                "required_codes": required_ingredients,
+            }
+        )
 
         pipeline = [
-            {"$match": {
-                "$expr": {"$setIsSubset": ["$ingredients.ingredient_id", available_ingredients]},
-                "ingredients.ingredient_id": {"$all": required_ingredients},
-                "cooking_time": {"$lte": max_cooking_time},
-            }},
-            {"$sample": {"size": 1}}
+            {
+                "$match": {
+                    "$expr": {
+                        "$setIsSubset": [
+                            "$ingredients.ingredient_id",
+                            available_ingredients,
+                        ]
+                    },
+                    "ingredients.ingredient_id": {"$all": required_ingredients},
+                    "cooking_time": {"$lte": max_cooking_time},
+                }
+            },
+            {"$sample": {"size": 1}},
         ]
 
         cursor = await self.recipe_col.aggregate(pipeline)
@@ -40,12 +54,8 @@ class RecipeRecommender:
 
         selected = result[0]
 
-        ingredient_items = [
-            IngredientItem(**ing) for ing in selected["ingredients"]
-        ]
-        step_items = [
-            StepItem(**step) for step in selected["steps"]
-        ]
+        ingredient_items = [IngredientItem(**ing) for ing in selected["ingredients"]]
+        step_items = [StepItem(**step) for step in selected["steps"]]
 
         response = RecipeRecommendationResponse(
             name=selected["name"],
@@ -53,6 +63,6 @@ class RecipeRecommender:
             steps=step_items,
             missing_ingredients=[],
             recommend_score=1.0,
-            recommend_reason="おすすめのレシピを見つけました！"
+            recommend_reason="おすすめのレシピを見つけました！",
         )
         return response
