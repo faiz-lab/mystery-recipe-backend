@@ -8,7 +8,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origin_regex=".*",  # ✅ 正则匹配所有跨域请求
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
