@@ -1,6 +1,6 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from typing import List
+from typing import List, Union
 from app.services.recommender import RecipeRecommender
 from app.schemas.recipe_schema import RecipeRecommendationResponse
 
@@ -14,7 +14,13 @@ class RecommendRequest(BaseModel):
     required_ingredients: List[str]
     max_cooking_time: int
 
-@router.post("/recommend", response_model=RecipeRecommendationResponse)
+class RecommendResponse(BaseModel):
+    success: bool
+    found: bool
+    data: Union[RecipeRecommendationResponse, None] = None
+    message: Union[str, None] = None
+
+@router.post("/recommend", response_model=RecommendResponse)
 async def recommend_recipe(request: RecommendRequest, recommender: RecipeRecommender = Depends(get_recommender)):
     result = await recommender.recommend_recipe(
         available_ingredients=request.available_ingredients,
@@ -23,6 +29,14 @@ async def recommend_recipe(request: RecommendRequest, recommender: RecipeRecomme
     )
 
     if result is None:
-        raise HTTPException(status_code=404, detail="No suitable recipe found.")
+        return RecommendResponse(
+            success=True,
+            found=False,
+            message="条件に合うレシピが見つかりませんでした。"
+        )
 
-    return result
+    return RecommendResponse(
+        success=True,
+        found=True,
+        data=result
+    )
