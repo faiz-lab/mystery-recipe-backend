@@ -15,4 +15,5 @@ dependencies = [
   "PyJWT",
   "openai",
   "clerk-backend-api>=3.0.3",
+  "rapidfuzz>=3.13.0",
 ]
