@@ -1,7 +1,8 @@
-import openai
 import json
 import re
-from app.core import config
+
+import openai
+
 from app.core.config import settings
 
 client = openai.AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
