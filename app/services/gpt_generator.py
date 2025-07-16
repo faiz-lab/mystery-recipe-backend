@@ -14,6 +14,7 @@ async def generate_recipe_by_gpt(available_ingredients, required_ingredients, ma
     system_prompt = """
     あなたはプロの料理アシスタントです。
     入力条件を参考に、以下のフォーマットでレシピをJSON形式で出力してください。
+    出力は必ず日本語で書いてください。
 
     【フォーマット】
     {
@@ -49,7 +50,6 @@ async def generate_recipe_by_gpt(available_ingredients, required_ingredients, ma
 
     reply = response.choices[0].message.content
     return reply
-
 
 # Function Calling を使った食材標準化関数
 async def call_openai_suggest(user_input: str):
