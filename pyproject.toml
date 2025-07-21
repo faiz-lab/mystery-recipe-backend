@@ -16,4 +16,5 @@ dependencies = [
   "openai",
   "clerk-backend-api>=3.0.3",
   "rapidfuzz>=3.13.0",
+  "line-bot-sdk>=3.17.1",
 ]

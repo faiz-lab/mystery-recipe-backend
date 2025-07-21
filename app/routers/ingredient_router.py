@@ -8,10 +8,9 @@ from pydantic import BaseModel
 from rapidfuzz import process
 
 from app.core.db import get_collection
-from app.core.unit_converter import convert_to_standard
 from app.services.gpt_generator import call_openai_suggest
 
-router = APIRouter(prefix="/ingredients")
+router = APIRouter(prefix="/ingredients",  tags=["Ingredients"])
 ingredient_col = get_collection("ingredient_master")
 feedback_col = get_collection("ingredient_feedback")
 
@@ -66,7 +65,6 @@ def normalize_list(strings: List[str]) -> List[str]:
 
 
 def build_response_with_unit(status: str, doc: dict, quantity: float, unit: str) -> dict:
-    standard_unit, standard_quantity = convert_to_standard(unit, quantity, doc["internal_code"])
     return {
         "status": status,
         "data": {
@@ -78,8 +76,6 @@ def build_response_with_unit(status: str, doc: dict, quantity: float, unit: str)
             "confidence": doc.get("confidence", 1.0),
             "quantity": quantity,
             "unit": unit,
-            "standard_quantity": standard_quantity,
-            "standard_unit": standard_unit,
             "source": status
         }
     }

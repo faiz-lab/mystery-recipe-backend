@@ -46,3 +46,9 @@ class RecipeRecommendationResponse(BaseModel):
     missing_ingredients: List[str]
     recommend_score: float
     recommend_reason: str
+
+# ✅ 请求体 Schema
+class RecipeRecommendationRequest(BaseModel):
+    max_cooking_time: int = Field(..., description="最大調理時間（分）")
+    required_ingredients: List[str] = Field(default_factory=list, description="必ず使用する食材名")
+    available_ingredients: List[dict] = Field(..., description="利用可能な食材 [{name, quantity, unit}]")

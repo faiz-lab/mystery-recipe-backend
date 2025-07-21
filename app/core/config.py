@@ -2,7 +2,7 @@ import os
 from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
 
-# 载入 .env 文件
+# 加载 .env 文件
 load_dotenv()
 
 class Settings(BaseSettings):
@@ -14,12 +14,17 @@ class Settings(BaseSettings):
     MONGO_URI: str = "mongodb://localhost:27017"
     MONGO_DB_NAME: str = "mystery_recipe"
 
-    # CLERK 配置（顺便一起集成）
+    # CLERK 配置
     CLERK_SECRET_KEY: str = ""
+
+    # LINE Messaging API 配置 ✅ 新增
+    LINE_CHANNEL_ACCESS_TOKEN: str = ""
+    LINE_CHANNEL_SECRET: str = ""
 
     class Config:
         env_file = f".env.{os.getenv('ENVIRONMENT', 'development')}"
         env_file_encoding = 'utf-8'
+        extra = "ignore"  # ✅ 忽略未定义的字段
 
-# 生成全局配置实例
+# 全局实例
 settings = Settings()
