@@ -21,7 +21,7 @@ class RecipeRecommender:
         max_cooking_time: int,
     ) -> Optional[RecipeRecommendationResponse]:
 
-        available_ids = [item.get("name") for item in available_ingredients]
+        available_ids = [item.model_dump() for item in available_ingredients]
 
         print("[RecommendRequest]")
         pprint.pprint({"available_ids": available_ids,
@@ -29,46 +29,50 @@ class RecipeRecommender:
                        "max_cooking_time": max_cooking_time
                        })
 
-        pipeline = [
-            {
-                "$match": {
-                    "$expr": {
-                        "$setIsSubset": [
-                            {
-                                "$map": {
-                                    "input": "$ingredients",
-                                    "as": "ing",
-                                    "in": "$$ing.name"
-                                }
-                            },
-                            available_ids
-                        ]
-                    },
-                    "ingredients.name": {"$all": required_ingredients},
-                    "cooking_time": {"$lte": max_cooking_time}
-                }
+        # ✅ 构建 MongoDB pipeline
+        match_conditions = {
+            "cooking_time": {"$lte": max_cooking_time},
+            "ingredients": {
+                "$all": [
+                    {"$elemMatch": {"name": name}} for name in required_ingredients
+                ]
             },
-            {
-                "$addFields": {
-                    "match_score": {
-                        "$size": {
-                            "$setIntersection": [
-                                {
-                                    "$map": {"input": "$ingredients", "as": "ing", "in": "$$ing.name"}
-                                },
-                                available_ids
-                            ]
+            "$expr": {
+                "$allElementsTrue": [
+                    {
+                        "$map": {
+                            "input": "$ingredients",
+                            "as": "ingr",
+                            "in": {
+                                "$or": [
+                                    {
+                                        "$and": [
+                                            {"$eq": ["$$ingr.name", ing["name"]]},
+                                            {"$lte": ["$$ingr.amount", ing["quantity"]]}
+                                        ]
+                                    }
+                                    for ing in available_ids
+                                ]
+                            }
                         }
                     }
-                }
-            },
-            {"$sort": {"match_score": -1, "cooking_time": 1}},
-            {"$limit": 3}
-        ]
+                ]
+            }
+        }
 
+        pipeline = [
+            {"$match": match_conditions},
+            {"$sample": {"size": 1}},
+            {"$unset": ["_id"]}
+        ]
         cursor = await self.recipe_col.aggregate(pipeline)
         result = await cursor.to_list(length=1)
-
+        # ✅ 打印结果
+        print("\n[MongoDB Query Result]")
+        if result:
+            pprint.pprint(result[0])  # 打印第一条
+        else:
+            print("No matching recipe found.")
         if not result:
             gpt_recipe = await generate_recipe_by_gpt(
                 available_ingredients=available_ids,
@@ -108,7 +112,14 @@ class RecipeRecommender:
             )
 
         selected = result[0]
-        ingredient_items = [IngredientItem(**ing) for ing in selected["ingredients"]]
+        ingredient_items = [
+            IngredientItem(
+                ingredient_id=ing.get("ingredient_id") or ing.get("name"),
+                quantity=ing.get("quantity") or ing.get("amount") or 0,
+                unit=ing.get("unit") or ""
+            )
+            for ing in selected["ingredients"]
+        ]
         step_items = [StepItem(**step) for step in selected["steps"]]
 
         return RecipeRecommendationResponse(
