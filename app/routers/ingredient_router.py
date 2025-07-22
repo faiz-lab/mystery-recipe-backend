@@ -1,197 +1,124 @@
-import unicodedata
-import re
-from enum import Enum
-from typing import List, Optional
-
-from fastapi import APIRouter
-from pydantic import BaseModel
-from rapidfuzz import process
-
+from fastapi import APIRouter, Query
+from typing import List
+from collections import defaultdict
 from app.core.db import get_collection
-from app.services.gpt_generator import call_openai_suggest
+import openai
+from app.core.config import settings
 
-router = APIRouter(prefix="/ingredients",  tags=["Ingredients"])
-ingredient_col = get_collection("ingredient_master")
-feedback_col = get_collection("ingredient_feedback")
+router = APIRouter(prefix="/ingredients", tags=["Ingredients"])
+ingredient_col = get_collection("ingredient_list")
 
+# ✅ 初始化 OpenAI 客户端
+openai.api_key = settings.OPENAI_API_KEY
 
-# ---------- Enum ----------
-class CategoryEnum(str, Enum):
-    vegetable = "vegetable"
-    meat = "meat"
-    dairy = "dairy"
-    seafood = "seafood"
-    grain = "grain"
-    other = "other"
-
-
-# ---------- Models ----------
-class IngredientMasterSchema(BaseModel):
-    id: Optional[str] = None
-    standard_name: str
-    internal_code: str
-    synonyms: List[str]
-    emoji: Optional[str]
-    category: CategoryEnum
-    confidence: float = 0.8
-
-
-class NormalizeRequest(BaseModel):
-    raw_input: str
-
-
-class CorrectionData(BaseModel):
-    standard_name: str
-    internal_code: str
-    synonyms: List[str]
-    emoji: Optional[str] = None
-    category: CategoryEnum
-    confidence: float = 0.8
-
-
-class FeedbackRequest(BaseModel):
-    user_input: str
-    accepted: bool
-    correction: Optional[CorrectionData] = None
-
-
-# ---------- Utils ----------
-def normalize_input(text: str) -> str:
-    return unicodedata.normalize("NFKC", text.strip().lower())
-
-
-def normalize_list(strings: List[str]) -> List[str]:
-    return list(set(normalize_input(s) for s in strings))
-
-
-def build_response_with_unit(status: str, doc: dict, quantity: float, unit: str) -> dict:
-    return {
-        "status": status,
-        "data": {
-            "standard_name": doc["standard_name"],
-            "internal_code": doc["internal_code"],
-            "synonyms": sorted(set(doc.get("synonyms", []))),
-            "emoji": doc.get("emoji", ""),
-            "category": doc.get("category", "other"),
-            "confidence": doc.get("confidence", 1.0),
-            "quantity": quantity,
-            "unit": unit,
-            "source": status
-        }
-    }
-
-
-# ---------- /resolve ----------
-@router.post("/resolve")
-async def resolve_ingredient(request: NormalizeRequest):
-    raw = request.raw_input.strip()
-
-    # Step 1: 解析「名称 + 数量 + 单位」
-    match = re.match(r"([\wぁ-んァ-ン一-龥]+)\s*([\d\.]+)?\s*([^\d\s]*)", raw)
-    if not match:
-        return {"status": "invalid_format", "message": "形式を確認してください（例: 玉ねぎ 1個）"}
-
-    name = match.group(1)
-    quantity = float(match.group(2)) if match.group(2) else 1
-    unit = match.group(3) or "個"
-    user_input = normalize_input(name)
-
-    # Step 2: 精确匹配
-    doc = await ingredient_col.find_one({
-        "$or": [
-            {"standard_name": user_input},
-            {"internal_code": user_input},
-            {"synonyms": user_input}
+@router.get("")
+async def get_ingredients(
+    search: str = Query("", description="検索キーワード"),
+    categories: List[str] = Query([], description="カテゴリフィルター"),
+    group_by: str = Query("", description="グルーピングキー（例: category)")
+):
+    query = {}
+    if search:
+        query["$or"] = [
+            {"name": {"$regex": search, "$options": "i"}},
+            {"synonyms": {"$regex": search, "$options": "i"}}
         ]
-    })
-    if doc:
-        return build_response_with_unit("hit", doc, quantity, unit)
+    if categories:
+        query["category"] = {"$in": categories}
 
-    # Step 3: 模糊匹配
-    all_docs = await ingredient_col.find({}).to_list(length=None)
-    candidates = {}
-    for d in all_docs:
-        fields = [d["standard_name"], d["internal_code"]] + d.get("synonyms", [])
-        for s in fields:
-            norm = normalize_input(s)
-            if norm not in candidates:
-                candidates[norm] = d
+    # ✅ 如果需要分组返回
+    if group_by == "category":
+        cursor = ingredient_col.find(query)
+        docs = await cursor.to_list(length=None)
 
-    match_result = process.extractOne(user_input, list(candidates.keys()))
-    if match_result:
-        best_match, score, _ = match_result
-        if score >= 85:
-            return build_response_with_unit("fuzzy", candidates[best_match], quantity, unit)
+        grouped = defaultdict(list)
+        for doc in docs:
+            grouped[doc.get("category", "その他")].append({
+                "name": doc.get("name", ""),
+                "units": doc.get("units", []),
+            })
+        return {"group_by": "category", "data": grouped, "source": "db"}
 
-    # Step 4: GPT 补充
-    result = await call_openai_suggest(user_input)
-    if result:
-        slug_code = normalize_input(result["internal_code"])
-        existing = await ingredient_col.find_one({"internal_code": slug_code})
+    # ✅ 第一步：MongoDB 正常查询
+    cursor = ingredient_col.find(query)
+    docs = await cursor.to_list(length=None)
 
-        if existing:
-            norm_user_input = normalize_input(request.raw_input)
-            if norm_user_input not in normalize_list(existing.get("synonyms", [])):
-                await ingredient_col.update_one(
-                    {"_id": existing["_id"]},
-                    {"$addToSet": {"synonyms": norm_user_input}}
-                )
-                existing["synonyms"].append(request.raw_input)
-            return build_response_with_unit("hit_gpt", existing, quantity, unit)
+    # 如果 MongoDB 命中 → 直接返回
+    if docs:
+        return {
+            "results": [
+                {
+                    "name": doc.get("name", ""),
+                    "highlight_name": (
+                        doc.get("name", "").replace(search, f"<mark>{search}</mark>")
+                        if search else doc.get("name", "")
+                    ),
+                    "category": doc.get("category", ""),
+                    "units": doc.get("units", []),
+                }
+                for doc in docs
+            ],
+            "total": len(docs),
+            "source": "db"
+        }
 
-        return {"status": "suggest", "data": result}
+    # ✅ 第二步：调用 OpenAI 生成候选
+    if search:
+        try:
+            gpt_response = openai.OpenAI().chat.completions.create(
+                model="gpt-4o",  # 可换成 gpt-4o
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "あなたは食材名のマッチングエンジンです。"
+                    },
+                    {
+                        "role": "user",
+                        "content": f"""
+                        ユーザーが入力した食材: {search}
+                        以下のルールで候補を3つ提案してください：
+                        - 日本語の食材名のみ
+                        - 食材名だけ、カンマ区切り
+                        """
+                    }
+                ],
+                max_tokens=100
+            )
+            suggestions_text = gpt_response.choices[0].message.content
+            if suggestions_text is not None:
+                suggestions = [s.strip() for s in suggestions_text.split(",") if s.strip()]
+            else:
+                suggestions = []
+        except Exception as e:
+            print(f"OpenAI API error: {e}")
+            suggestions = []
 
-    return {
-        "status": "not_found",
-        "message": "該当する食材を見つかりませんでした。"
-    }
+        # ✅ 如果 GPT 提供了候选 → 回到 MongoDB 再查
+        fallback_results = []
+        if suggestions:
+            query = {
+                "$or": [
+                    {"name": {"$in": suggestions}},
+                    {"synonyms": {"$in": suggestions}}
+                ]
+            }
+            cursor = ingredient_col.find(query)
+            fallback_docs = await cursor.to_list(length=None)
 
+            for doc in fallback_docs:
+                fallback_results.append({
+                    "name": doc.get("name", ""),
+                    "highlight_name": doc.get("name", ""),
+                    "category": doc.get("category", ""),
+                    "units": doc.get("units", []),
+                })
 
-# ---------- /feedback ----------
-@router.post("/feedback")
-async def feedback_handler(request: FeedbackRequest):
-    await feedback_col.insert_one(request.model_dump())
+        return {
+            "results": fallback_results,
+            "total": len(fallback_results),
+            "source": "fallback",  # ✅ 用于前端提示“AI補助検索”
+            "suggestions": suggestions  # ✅ 方便前端展示 GPT 原始候補
+        }
 
-    if not request.accepted:
-        return {"success": True}
-
-    doc = request.correction or await call_openai_suggest(request.user_input)
-
-    if isinstance(doc, dict):
-        doc = CorrectionData(**doc)
-
-    doc.synonyms = normalize_list(doc.synonyms)
-
-    exist = await ingredient_col.find_one({"internal_code": doc.internal_code})
-    if not exist:
-        await ingredient_col.insert_one({
-            "internal_code": doc.internal_code,
-            "standard_name": doc.standard_name,
-            "synonyms": doc.synonyms,
-            "emoji": doc.emoji or "",
-            "category": doc.category.value,
-            "confidence": doc.confidence,
-            "source": "gpt+user"
-        })
-
-    return {"success": True}
-
-
-# ---------- /create ----------
-@router.post("/create", response_model=IngredientMasterSchema)
-async def create_ingredient(ingredient: IngredientMasterSchema):
-    clean_synonyms = normalize_list(ingredient.synonyms)
-    clean_internal_code = normalize_input(ingredient.internal_code)
-
-    data = {
-        "standard_name": ingredient.standard_name,
-        "internal_code": clean_internal_code,
-        "synonyms": clean_synonyms,
-        "emoji": ingredient.emoji or "",
-        "category": ingredient.category.value,
-        "confidence": ingredient.confidence,
-        "source": "manual"
-    }
-
-    await ingredient_col.insert_one(data)
-    return IngredientMasterSchema(**data)
+    # ✅ 搜索词为空 → 返回空数组
+    return {"results": [], "total": 0, "source": "db"}
