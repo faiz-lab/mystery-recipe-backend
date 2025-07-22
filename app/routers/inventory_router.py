@@ -30,7 +30,7 @@ async def patch_inventory(user_id: str, req: InventoryPatchRequest):
 
     # ✅ 更新操作
     for item in req.update or []:
-        inventory_map[item.name] = item.dict()
+        inventory_map[item.name] = item.model_dump()
 
     # ✅ 删除操作
     for name in req.remove or []:
@@ -42,7 +42,7 @@ async def patch_inventory(user_id: str, req: InventoryPatchRequest):
     # ✅ 保存到 MongoDB
     result = await db.users.update_one(
         {"_id": user_id},
-        {"$set": {"inventory": new_inventory, "updated_at": datetime.utcnow()}},
+        {"$set": {"inventory": new_inventory, "updated_at": datetime.now()}},
         upsert=True
     )
 
