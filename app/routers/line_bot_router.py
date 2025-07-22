@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Request
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, TextMessage, TextSendMessage
+from linebot.models import MessageEvent, TextMessage, ImageMessage, TextSendMessage
 import asyncio
 import base64
 
@@ -20,6 +20,8 @@ handler = WebhookHandler(settings.LINE_CHANNEL_SECRET)
 ingredient_col = get_collection("user_ingredients")
 recommender = RecipeRecommender()
 
+
+# === Webhook Callback ===
 @router.post("/callback")
 async def callback(request: Request):
     signature = request.headers.get("X-Line-Signature")
@@ -30,15 +32,18 @@ async def callback(request: Request):
         return {"error": "Invalid signature"}
     return {"status": "ok"}
 
+
+# === TextMessage 处理 ===
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text_message(event):
     user_id = event.source.user_id
     text = event.message.text.strip()
 
-    # ✅ 先立即回复
+    # ✅ 立即回复
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text="処理中です…"))
 
     asyncio.get_event_loop().create_task(process_text_async(user_id, text))
+
 
 async def process_text_async(user_id, text):
     if text == "食材を登録する":
@@ -50,7 +55,7 @@ async def process_text_async(user_id, text):
         if not user_doc or "ingredients" not in user_doc:
             reply_text = "食材が登録されていません。まず食材を登録してください。"
         else:
-            # ✅ 获取完整库存对象
+            # ✅ 获取库存
             available_ingredients = [
                 AvailableIngredient(**{
                     "name": ing.get("ingredient_id") or ing.get("name"),
@@ -60,14 +65,11 @@ async def process_text_async(user_id, text):
                 for ing in user_doc["ingredients"]
             ]
 
-            required_ingredients = []  # 未来可以支持用户选择必用食材
-            max_cooking_time = 30
-
-            # ✅ 调用升级后的推荐器
+            # ✅ 推荐逻辑
             recipe = await recommender.recommend_recipe(
                 available_ingredients=available_ingredients,
-                required_ingredients=required_ingredients,
-                max_cooking_time=max_cooking_time
+                required_ingredients=[],  # 未来支持必选食材
+                max_cooking_time=30
             )
 
             if not recipe:
@@ -84,10 +86,11 @@ async def process_text_async(user_id, text):
         else:
             step_index = user_state.get("current_step", 0) + 1
             recipe = user_state["recipe"]
+
             if step_index < len(recipe["steps"]):
                 next_step = recipe["steps"][step_index]["instruction"]
                 update_step(user_id, step_index)
-                reply_text = f"📝 手動で次のステップに進みます。\n\nステップ{step_index + 1}: {next_step}\n終わったら写真を送ってください📸"
+                reply_text = f"📝 次のステップ:\nステップ{step_index + 1}: {next_step}\n終わったら写真を送ってください📸"
 
                 trivia = await generate_trivia(next_step)
                 if trivia and "今回は暇ではない" not in trivia:
@@ -98,6 +101,52 @@ async def process_text_async(user_id, text):
     else:
         reply_text = '「スタート」または「次へ」と送ってください。'
 
-    # ✅ 最终推送
     if reply_text:
         line_bot_api.push_message(user_id, TextSendMessage(text=reply_text))
+
+
+# === ImageMessage 处理 ===
+@handler.add(MessageEvent, message=ImageMessage)
+def handle_image_message(event):
+    user_id = event.source.user_id
+    message_id = event.message.id
+
+    # ✅ 立即回复
+    line_bot_api.reply_message(event.reply_token, TextSendMessage(text="画像を確認しています..."))
+
+    asyncio.get_event_loop().create_task(process_image_async(user_id, message_id))
+
+
+async def process_image_async(user_id, message_id):
+    user_state = get_user_state(user_id)
+    if not user_state or "recipe" not in user_state:
+        line_bot_api.push_message(user_id, TextSendMessage(text="レシピ情報が見つかりません。最初からやり直してください。"))
+        return
+
+    step_index = user_state.get("current_step", 0)
+    recipe = user_state["recipe"]
+    current_instructions = "\n".join(
+        [f"ステップ{i+1}: {step['instruction']}" for i, step in enumerate(recipe["steps"][:step_index + 1])]
+    )
+
+    # ✅ 下载图片
+    message_content = line_bot_api.get_message_content(message_id)
+    image_bytes = b"".join(chunk for chunk in message_content.iter_content())
+    base64_image = base64.b64encode(image_bytes).decode("utf-8")
+
+    # ✅ 调用 GPT 进行图像验证
+    result = await verify_step_image(current_instructions, base64_image)
+
+    if "はい" in result:
+        step_index += 1
+        update_step(user_id, step_index)
+
+        if step_index < len(recipe["steps"]):
+            next_step = recipe["steps"][step_index]["instruction"]
+            reply_text = f"✅ OK！次のステップへ進みます。\n\nステップ{step_index + 1}: {next_step}\n終わったらまた写真を送ってください📸"
+        else:
+            reply_text = f"🎉 料理が完成しました！お疲れ様でした！\n\nレシピ名：{recipe['name']}"
+    else:
+        reply_text = "😅 画像が手順と少し違うようです。もう一度撮影して送ってください。"
+
+    line_bot_api.push_message(user_id, TextSendMessage(text=reply_text))
