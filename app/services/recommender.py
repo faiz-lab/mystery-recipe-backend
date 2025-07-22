@@ -5,7 +5,7 @@ from typing import List, Optional
 from app.schemas.recipe_schema import (
     IngredientItem,
     StepItem,
-    RecipeRecommendationResponse,
+    RecipeRecommendationResponse, AvailableIngredient,
 )
 from app.core.db import get_collection
 from app.services.gpt_generator import generate_recipe_by_gpt
@@ -16,7 +16,7 @@ class RecipeRecommender:
 
     async def recommend_recipe(
         self,
-        available_ingredients: List[dict],  # [{ name, quantity, unit }]
+        available_ingredients: List[AvailableIngredient],  # [{ name, quantity, unit }]
         required_ingredients: List[str],
         max_cooking_time: int,
     ) -> Optional[RecipeRecommendationResponse]:
@@ -24,7 +24,10 @@ class RecipeRecommender:
         available_ids = [item.get("name") for item in available_ingredients]
 
         print("[RecommendRequest]")
-        pprint.pprint({"available_ids": available_ids, "required_ids": required_ingredients})
+        pprint.pprint({"available_ids": available_ids,
+                       "required_ids": required_ingredients,
+                       "max_cooking_time": max_cooking_time
+                       })
 
         pipeline = [
             {
@@ -45,7 +48,22 @@ class RecipeRecommender:
                     "cooking_time": {"$lte": max_cooking_time}
                 }
             },
-            {"$sample": {"size": 1}}
+            {
+                "$addFields": {
+                    "match_score": {
+                        "$size": {
+                            "$setIntersection": [
+                                {
+                                    "$map": {"input": "$ingredients", "as": "ing", "in": "$$ing.name"}
+                                },
+                                available_ids
+                            ]
+                        }
+                    }
+                }
+            },
+            {"$sort": {"match_score": -1, "cooking_time": 1}},
+            {"$limit": 3}
         ]
 
         cursor = await self.recipe_col.aggregate(pipeline)

@@ -4,6 +4,8 @@ from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import asyncio
 import base64
+
+from app.schemas.recipe_schema import AvailableIngredient
 from app.services.recommender import RecipeRecommender
 from app.core.db import get_collection
 from app.services.db_service import save_user_recipe, get_user_state, update_step
@@ -50,13 +52,14 @@ async def process_text_async(user_id, text):
         else:
             # ✅ 获取完整库存对象
             available_ingredients = [
-                {
-                    "name": item.get("ingredient_id"),  # 或者存储时就是 name
-                    "quantity": item.get("quantity", 0),
-                    "unit": item.get("unit", "")
-                }
-                for item in user_doc["ingredients"]
+                AvailableIngredient(**{
+                    "name": ing.get("ingredient_id") or ing.get("name"),
+                    "quantity": float(ing.get("quantity", 0)),
+                    "unit": ing.get("unit", "")
+                })
+                for ing in user_doc["ingredients"]
             ]
+
             required_ingredients = []  # 未来可以支持用户选择必用食材
             max_cooking_time = 30
 
