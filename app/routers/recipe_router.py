@@ -3,6 +3,10 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Any
 
+from linebot import LineBotApi
+from linebot.models import TextSendMessage
+
+from app.core.config import settings
 from app.core.db import db
 from app.schemas.recipe_schema import RecipeRecommendationResponse, RecipeRecommendationRequest
 from app.services.recommender import RecipeRecommender
@@ -10,6 +14,7 @@ from app.services.gpt_service import generate_trivia, verify_step_image
 
 router = APIRouter(prefix="/recipes", tags=["Recipes"])
 recommender = RecipeRecommender()
+line_bot_api = LineBotApi(settings.LINE_CHANNEL_ACCESS_TOKEN)
 
 
 @router.post("/recommendations", response_model=RecipeRecommendationResponse)
@@ -36,6 +41,16 @@ async def recommend_recipes(req: RecipeRecommendationRequest):
             },
             upsert=True,
         )
+
+        try:
+            first_instruction = recipe.steps[0].instruction if recipe.steps else ""
+            trivia = await generate_trivia(first_instruction) if first_instruction else ""
+            message = f"おすすめレシピが決まりました！\nステップ1: {first_instruction}"
+            if trivia:
+                message += f"\n🧠 うんちく: {trivia}"
+            line_bot_api.push_message(req.user_id, TextSendMessage(text=message))
+        except Exception as e:  # pragma: no cover - push error handling
+            print(f"LINE push error: {e}")
     return recipe
 
 
