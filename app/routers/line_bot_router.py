@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Request
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
+from datetime import datetime
 from linebot.models import MessageEvent, TextMessage, ImageMessage, TextSendMessage
 import asyncio
 import base64
@@ -8,11 +9,14 @@ import base64
 from app.core.config import settings
 from app.core.db import db
 from app.services.gpt_service import generate_trivia, verify_step_image
+from app.services.recommender import RecipeRecommender
+from app.schemas.recipe_schema import AvailableIngredient
 
 router = APIRouter(prefix="/line", tags=["LINE Bot"])
 
 line_bot_api = LineBotApi(settings.LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(settings.LINE_CHANNEL_SECRET)
+recommender = RecipeRecommender()
 
 
 @router.post("/callback")
@@ -36,19 +40,40 @@ def handle_text(event):
 
 
 async def process_text(user_id: str, text: str):
+    """Process text messages from user."""
     if text == "食材を登録する":
-        link_url = f"https://example.com/?user_id={user_id}"
+        link_url = f"https://example.com/register?user_id={user_id}"
         reply = f"こちらから登録ページを開いてください👇\n{link_url}"
         line_bot_api.push_message(user_id, TextSendMessage(text=reply))
         return
 
     if text == "スタート":
         user = await db.users.find_one({"_id": user_id})
-        if not user or "current_recipe" not in user:
-            line_bot_api.push_message(user_id, TextSendMessage(text="レシピが登録されていません。"))
+        inventory = user.get("inventory", []) if user else []
+        available = [AvailableIngredient(**item) for item in inventory]
+        recipe = await recommender.recommend_recipe(
+            available_ingredients=available,
+            required_ingredients=[],
+            max_cooking_time=60,
+        )
+
+        if not recipe:
+            line_bot_api.push_message(user_id, TextSendMessage(text="おすすめできるレシピが見つかりませんでした。"))
             return
-        await db.users.update_one({"_id": user_id}, {"$set": {"current_step": 0}})
-        first_step = user["current_recipe"]["steps"][0]["instruction"]
+
+        await db.users.update_one(
+            {"_id": user_id},
+            {
+                "$set": {
+                    "current_recipe": recipe.model_dump(),
+                    "current_step": 1,
+                    "updated_at": datetime.utcnow(),
+                }
+            },
+            upsert=True,
+        )
+
+        first_step = recipe.steps[0].instruction
         trivia = await generate_trivia(first_step)
         reply = f"ステップ1: {first_step}" + (f"\n\n🧠 うんちく:\n{trivia}" if trivia else "")
         line_bot_api.push_message(user_id, TextSendMessage(text=reply))
@@ -57,21 +82,32 @@ async def process_text(user_id: str, text: str):
     if text == "次へ":
         user = await db.users.find_one({"_id": user_id})
         if not user or "current_recipe" not in user:
-            line_bot_api.push_message(user_id, TextSendMessage(text="最初からやり直してください。"))
+            line_bot_api.push_message(user_id, TextSendMessage(text="スタートから始めてください。"))
             return
-        step_index = user.get("current_step", 0)
+
+        step_index = user.get("current_step", 1)
         recipe = user["current_recipe"]
+
         if step_index >= len(recipe["steps"]):
             line_bot_api.push_message(user_id, TextSendMessage(text="全てのステップが完了しました！"))
             return
+
         step = recipe["steps"][step_index]["instruction"]
         trivia = await generate_trivia(step)
-        await db.users.update_one({"_id": user_id}, {"$set": {"current_step": step_index + 1}})
+
+        await db.users.update_one(
+            {"_id": user_id},
+            {"$set": {"current_step": step_index + 1, "updated_at": datetime.utcnow()}},
+        )
+
         reply = f"ステップ{step_index + 1}: {step}" + (f"\n\n🧠 うんちく:\n{trivia}" if trivia else "")
         line_bot_api.push_message(user_id, TextSendMessage(text=reply))
         return
 
-    line_bot_api.push_message(user_id, TextSendMessage(text='「スタート」または「次へ」と送ってください。'))
+    line_bot_api.push_message(
+        user_id,
+        TextSendMessage(text='「食材を登録する」「スタート」「次へ」のいずれかを送信してください。'),
+    )
 
 
 @handler.add(MessageEvent, message=ImageMessage)
@@ -87,8 +123,10 @@ async def process_image(user_id: str, message_id: str):
     if not user or "current_recipe" not in user:
         line_bot_api.push_message(user_id, TextSendMessage(text="レシピ情報が見つかりません。"))
         return
-    step_index = user.get("current_step", 0)
+
+    step_index = max(user.get("current_step", 1) - 1, 0)
     recipe = user["current_recipe"]
+
     instructions = "\n".join(
         [f"ステップ{i+1}: {s['instruction']}" for i, s in enumerate(recipe["steps"][: step_index + 1])]
     )
@@ -98,13 +136,24 @@ async def process_image(user_id: str, message_id: str):
     result = await verify_step_image(instructions, base64_image)
 
     if "はい" in result:
-        if step_index < len(recipe["steps"]):
-            next_step_text = recipe["steps"][step_index]["instruction"]
+        next_index = step_index + 1
+        if next_index < len(recipe["steps"]):
+            next_step_text = recipe["steps"][next_index]["instruction"]
             trivia = await generate_trivia(next_step_text)
-            reply = f"✅ OK！\nステップ{step_index + 1}: {next_step_text}" + (f"\n\n🧠 うんちく:\n{trivia}" if trivia else "")
-            await db.users.update_one({"_id": user_id}, {"$set": {"current_step": step_index + 1}})
+            reply = (
+                f"✅ OK！\nステップ{next_index + 1}: {next_step_text}"
+                + (f"\n\n🧠 うんちく:\n{trivia}" if trivia else "")
+            )
+            await db.users.update_one(
+                {"_id": user_id},
+                {"$set": {"current_step": next_index + 1, "updated_at": datetime.utcnow()}},
+            )
         else:
             reply = "🎉 料理が完成しました！"
+            await db.users.update_one(
+                {"_id": user_id},
+                {"$set": {"current_step": next_index + 1, "updated_at": datetime.utcnow()}},
+            )
     else:
         reply = "😅 画像が手順と合っていないようです。"
 
