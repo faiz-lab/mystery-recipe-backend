@@ -5,7 +5,7 @@ from typing import List, Optional
 from app.schemas.recipe_schema import (
     IngredientItem,
     StepItem,
-    RecipeRecommendationResponse, AvailableIngredient,
+    RecipeRecommendationResponse, AvailableIngredient, RequiredIngredient,
 )
 from app.core.db import get_collection
 from app.services.gpt_generator import generate_recipe_by_gpt
@@ -17,7 +17,7 @@ class RecipeRecommender:
     async def recommend_recipe(
         self,
         available_ingredients: List[AvailableIngredient],  # [{ name, quantity, unit }]
-        required_ingredients: List[str],
+        required_ingredients: List[RequiredIngredient],
         max_cooking_time: int,
     ) -> Optional[RecipeRecommendationResponse]:
 
@@ -34,7 +34,7 @@ class RecipeRecommender:
             "cooking_time": {"$lte": max_cooking_time},
             "ingredients": {
                 "$all": [
-                    {"$elemMatch": {"name": name}} for name in required_ingredients
+                    {"$elemMatch": {"name": req_ingr.name}, "amount": {"gte": req_ingr.amount}} for req_ingr in required_ingredients
                 ]
             },
             "$expr": {

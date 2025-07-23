@@ -2,7 +2,7 @@ from datetime import datetime
 from app.core.db import get_collection
 
 # 获取 MongoDB 集合
-user_state_col = get_collection("user_actions")
+user_state_col = get_collection("users")
 
 # === 保存用户食谱 ===
 def save_user_recipe(user_id: str, recipe: dict):
@@ -12,12 +12,11 @@ def save_user_recipe(user_id: str, recipe: dict):
     """
     now = datetime.now()
     user_state_col.update_one(
-        {"user_id": user_id},
+        {"_id": user_id},
         {
             "$set": {
-                "recipe": recipe,
+                "current_recipe": recipe,
                 "current_step": 0,
-                "updated_at": now
             },
             "$setOnInsert": {"created_at": now}
         },

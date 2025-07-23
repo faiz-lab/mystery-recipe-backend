@@ -27,12 +27,15 @@ class AvailableIngredient(BaseModel):
     quantity: float = Field(..., description="数量（例: 100）")
     unit: str = Field(..., description="単位（例: g, ml）")
 
+class RequiredIngredient(BaseModel):
+    name: str = Field(..., description="食材名（例: キャベツ）")
+    amount: float = Field(..., description="数量（例: 100）")
 
 class RecipeRecommendationRequest(BaseModel):
+    user_id: Optional[str] = None  # ✅ 新增
     max_cooking_time: int = Field(..., description="最大調理時間（分）")
-    required_ingredients: List[str] = Field(default_factory=list, description="必ず使用する食材名（例: ['キャベツ']）")
+    required_ingredients: List[RequiredIngredient] = Field(default_factory=list, description="必ず使用する食材名（例: ['キャベツ']）")
     available_ingredients: List[AvailableIngredient] = Field(..., description="利用可能な食材リスト [{name, quantity, unit}]")
-
 
 # ===============================
 # 🔹 API 出力モデル（API → フロントエンド）
