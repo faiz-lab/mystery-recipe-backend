@@ -4,9 +4,13 @@ from collections import defaultdict
 from app.core.db import get_collection
 import openai
 from app.core.config import settings
+from datetime import datetime
+from pydantic import BaseModel
+from app.schemas.inventory_schema import InventoryItem
+from app.core.db import db
 
-router = APIRouter(prefix="/ingredients", tags=["Ingredients"])
 ingredient_col = get_collection("ingredient_list")
+router = APIRouter(prefix="/ingredients", tags=["Ingredients"])
 
 # ✅ 初始化 OpenAI 客户端
 openai.api_key = settings.OPENAI_API_KEY
@@ -113,12 +117,21 @@ async def get_ingredients(
                     "units": doc.get("units", []),
                 })
 
-        return {
-            "results": fallback_results,
-            "total": len(fallback_results),
-            "source": "fallback",  # ✅ 用于前端提示“AI補助検索”
-            "suggestions": suggestions  # ✅ 方便前端展示 GPT 原始候補
-        }
-
     # ✅ 搜索词为空 → 返回空数组
     return {"results": [], "total": 0, "source": "db"}
+
+
+class IngredientRegisterRequest(BaseModel):
+    user_id: str
+    ingredients: List[InventoryItem]
+
+
+@router.post("/register")
+async def register_ingredients(req: IngredientRegisterRequest):
+    """Register user's available ingredients."""
+    await db.users.update_one(
+        {"_id": req.user_id},
+        {"$set": {"inventory": [item.model_dump() for item in req.ingredients], "updated_at": datetime.utcnow()}},
+        upsert=True,
+    )
+    return {"success": True}
