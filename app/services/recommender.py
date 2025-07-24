@@ -1,7 +1,7 @@
-import random
 import json
 from typing import List, Optional
 
+from app.core.db import get_collection
 from app.schemas.recipe_schema import (
     IngredientItem,
     StepItem,
@@ -9,8 +9,6 @@ from app.schemas.recipe_schema import (
     AvailableIngredient,
     RequiredIngredient,
 )
-from datetime import datetime
-from app.core.db import db, get_collection
 from app.services.gpt_generator import generate_recipe_by_gpt
 
 
@@ -22,24 +20,67 @@ class RecipeRecommender:
 
     async def _find_from_db(
         self,
-        available: List[str],
-        required: List[str],
+        available_ingredients: List[AvailableIngredient],
+        required_ingredients: List[RequiredIngredient],
         max_time: int,
     ) -> Optional[dict]:
-        """Find a matching recipe document from MongoDB."""
-        cursor = self.recipe_col.find({"cooking_time": {"$lte": max_time}})
-        docs = await cursor.to_list(length=None)
-        candidates = []
-        for doc in docs:
-            names = [ing.get("ingredient_id") or ing.get("name") for ing in doc.get("ingredients", [])]
-            if not all(r in names for r in required):
-                continue
-            if not set(names).issubset(set(available)):
-                continue
-            candidates.append(doc)
-        if not candidates:
-            return None
-        return random.choice(candidates)
+        """
+        使用 MongoDB aggregation pipeline 查找符合条件的食谱。
+        条件：
+        1. cooking_time <= max_time
+        2. required_ingredients 中的每个食材必须出现在 recipe.ingredients 且数量足够
+        3. recipe.ingredients 中每个食材必须可以由 available_ingredients 提供，且数量足够
+        """
+
+        # 构建 aggregation pipeline
+        pipeline = [
+            {
+                "$match": {
+                    # 条件1: 調理時間が指定時間以下
+                    "cooking_time": {"$lte": max_time},
+                    # 条件2: required_ingredients 中的每个食材必须满足
+                    "ingredients": {
+                        "$all": [
+                            {
+                                "$elemMatch": {
+                                    "name": req_ingr.name,
+                                    "amount": {"$gte": req_ingr.amount},
+                                }
+                            }
+                            for req_ingr in required_ingredients
+                        ]
+                    },
+                    # 条件3: 所有食材都必须可以由 available_ingredients 提供
+                    "$expr": {
+                        "$allElementsTrue": [
+                            {
+                                "$map": {
+                                    "input": "$ingredients",
+                                    "as": "ingr",
+                                    "in": {
+                                        "$or": [
+                                            {
+                                                "$and": [
+                                                    {"$eq": ["$$ingr.name", avail_ingr.name]},
+                                                    {"$lte": ["$$ingr.amount", avail_ingr.amount]},
+                                                ]
+                                            }
+                                            for avail_ingr in available_ingredients
+                                        ]
+                                    },
+                                }
+                            }
+                        ]
+                    },
+                }
+            },
+            {"$sample": {"size": 1}},  # 随机选一条
+            {"$unset": ["_id"]},       # 移除 _id 字段
+        ]
+
+        cursor = self.recipe_col.aggregate(pipeline)
+        result = await cursor.to_list(length=1)
+        return result[0] if result else None
 
     async def recommend_recipe(
         self,
@@ -47,12 +88,12 @@ class RecipeRecommender:
         required_ingredients: List[RequiredIngredient],
         max_cooking_time: int,
     ) -> Optional[RecipeRecommendationResponse]:
-        """Recommend recipe based on ingredients and cooking time."""
-        available_names = [item.name for item in available_ingredients]
-        required_names = [item.name for item in required_ingredients]
+        """Recommend a recipe based on ingredients and cooking time."""
 
-        recipe_doc = await self._find_from_db(available_names, required_names, max_cooking_time)
+        # 调用 MongoDB 查询
+        recipe_doc = await self._find_from_db(available_ingredients, required_ingredients, max_cooking_time)
 
+        # 如果数据库未找到结果，调用 GPT 生成
         if not recipe_doc:
             gpt_recipe = await generate_recipe_by_gpt(
                 available_ingredients=[item.model_dump() for item in available_ingredients],
@@ -68,6 +109,7 @@ class RecipeRecommender:
             recommend_reason = "おすすめレシピを見つけました！"
             score = 1.0
 
+        # 转换食材和步骤
         ingredients = [
             IngredientItem(
                 ingredient_id=ing.get("ingredient_id") or ing.get("name"),
