@@ -16,6 +16,12 @@ router = APIRouter(prefix="/line", tags=["LINE Bot"])
 line_bot_api = LineBotApi(settings.LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(settings.LINE_CHANNEL_SECRET)
 
+@router.post("/notify")
+async def notify_line(data: dict):
+    user_id = data.get("user_id")
+    message = data.get("message", "登録完了")
+    line_bot_api.push_message(user_id, TextSendMessage(text=message))
+    return {"status": "ok"}
 
 @router.post("/callback")
 async def callback(request: Request):
@@ -40,7 +46,7 @@ def handle_text(event):
 async def process_text(user_id: str, text: str):
     """Process text messages from user."""
     if text == "食材を登録する":
-        link_url = f"https://mystery-recipe-ui.vercel.app/?user_id={user_id}"
+        link_url = f"https://mystery-recipe-ui.vercel.app?user_id={user_id}"
         reply = f"こちらから登録ページを開いてください👇\n{link_url}"
         line_bot_api.push_message(user_id, TextSendMessage(text=reply))
         return
