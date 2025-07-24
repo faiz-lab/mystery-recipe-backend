@@ -42,12 +42,12 @@ def handle_text(event):
 async def process_text(user_id: str, text: str):
     """Process text messages from user."""
     if text == "食材を登録する":
-        link_url = f"https://example.com/register?user_id={user_id}"
+        link_url = f"https://mystery-recipe-ui.vercel.app/?user_id={user_id}"
         reply = f"こちらから登録ページを開いてください👇\n{link_url}"
         line_bot_api.push_message(user_id, TextSendMessage(text=reply))
         return
 
-    if text == "スタート":
+    if text in ("スタート", "登録完了"):
         user = await db.users.find_one({"_id": user_id})
         inventory = user.get("inventory", []) if user else []
         available = [AvailableIngredient(**item) for item in inventory]
@@ -65,7 +65,15 @@ async def process_text(user_id: str, text: str):
             {"_id": user_id},
             {
                 "$set": {
-                    "current_recipe": recipe.model_dump(),
+                    "current_recipe": {
+                        "name": recipe.name,
+                        "cooking_time": recipe.cooking_time,
+                        "ingredients": [ing.model_dump() for ing in recipe.ingredients],
+                        "servings": recipe.servings,
+                        "recipe_img_url": recipe.recipe_img_url,
+                        "recipe_url": recipe.recipe_url,
+                        "steps": [step.model_dump() for step in recipe.steps],
+                    },
                     "current_step": 1,
                     "updated_at": datetime.utcnow(),
                 }
@@ -74,8 +82,10 @@ async def process_text(user_id: str, text: str):
         )
 
         first_step = recipe.steps[0].instruction
-        trivia = await generate_trivia(first_step)
-        reply = f"ステップ1: {first_step}" + (f"\n\n🧠 うんちく:\n{trivia}" if trivia else "")
+        reply = (
+            f"今回作る料理は、\u300c{recipe.servings}\u300dの料理です！頑張りましょう！\n"
+            f"ステップ1：{first_step}\nこの工程が終わったら写真を送ってください📸"
+        )
         line_bot_api.push_message(user_id, TextSendMessage(text=reply))
         return
 
