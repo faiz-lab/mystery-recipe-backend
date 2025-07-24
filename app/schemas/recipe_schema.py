@@ -44,7 +44,7 @@ class RecipeRecommendationResponse(BaseModel):
     name: str = Field(..., description="レシピ名")
     cooking_time: Optional[int] = Field(None, description="調理時間（分）")
     ingredients: List[IngredientItem] = Field(..., description="レシピに必要な食材")
-    servings: Optional[int] = Field(None, description="人数分")
+    servings: Optional[str] = Field(None, description="人数分")
     recipe_img_url: Optional[str] = Field(None, description="レシピ画像URL")
     recipe_url: Optional[str] = Field(None, description="参照レシピURL")
     steps: List[StepItem] = Field(..., description="調理手順")
