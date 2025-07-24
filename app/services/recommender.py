@@ -9,7 +9,8 @@ from app.schemas.recipe_schema import (
     AvailableIngredient,
     RequiredIngredient,
 )
-from app.core.db import get_collection
+from datetime import datetime
+from app.core.db import db, get_collection
 from app.services.gpt_generator import generate_recipe_by_gpt
 
 
@@ -79,9 +80,52 @@ class RecipeRecommender:
 
         return RecipeRecommendationResponse(
             name=recipe_doc.get("name", ""),
+            cooking_time=recipe_doc.get("cooking_time"),
             ingredients=ingredients,
+            servings=recipe_doc.get("servings"),
+            recipe_img_url=recipe_doc.get("recipe_img_url") or recipe_doc.get("image_url"),
+            recipe_url=recipe_doc.get("recipe_url"),
             steps=steps,
             missing_ingredients=[],
             recommend_score=score,
             recommend_reason=recommend_reason,
         )
+
+    async def recommend_for_user(self, user_id: str, max_cooking_time: int = 60) -> bool:
+        """Generate recommendation for a user and save it to MongoDB."""
+        user = await db.users.find_one({"_id": user_id})
+        inventory = user.get("inventory", []) if user else []
+        if not inventory:
+            return False
+
+        available = [AvailableIngredient(**item) for item in inventory]
+        recipe = await self.recommend_recipe(
+            available_ingredients=available,
+            required_ingredients=[],
+            max_cooking_time=max_cooking_time,
+        )
+
+        if not recipe:
+            return False
+
+        await db.users.update_one(
+            {"_id": user_id},
+            {
+                "$set": {
+                    "current_recipe": {
+                        "name": recipe.name,
+                        "cooking_time": recipe.cooking_time,
+                        "ingredients": [ing.model_dump() for ing in recipe.ingredients],
+                        "servings": recipe.servings,
+                        "recipe_img_url": recipe.recipe_img_url,
+                        "recipe_url": recipe.recipe_url,
+                        "steps": [step.model_dump() for step in recipe.steps],
+                    },
+                    "current_step": 1,
+                    "updated_at": datetime.utcnow(),
+                }
+            },
+            upsert=True,
+        )
+
+        return True

@@ -9,14 +9,12 @@ import base64
 from app.core.config import settings
 from app.core.db import db
 from app.services.gpt_service import generate_trivia, verify_step_image
-from app.services.recommender import RecipeRecommender
-from app.schemas.recipe_schema import AvailableIngredient
+
 
 router = APIRouter(prefix="/line", tags=["LINE Bot"])
 
 line_bot_api = LineBotApi(settings.LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(settings.LINE_CHANNEL_SECRET)
-recommender = RecipeRecommender()
 
 
 @router.post("/callback")
@@ -49,41 +47,15 @@ async def process_text(user_id: str, text: str):
 
     if text in ("スタート", "登録完了"):
         user = await db.users.find_one({"_id": user_id})
-        inventory = user.get("inventory", []) if user else []
-        available = [AvailableIngredient(**item) for item in inventory]
-        recipe = await recommender.recommend_recipe(
-            available_ingredients=available,
-            required_ingredients=[],
-            max_cooking_time=60,
-        )
+        recipe = user.get("current_recipe") if user else None
 
         if not recipe:
             line_bot_api.push_message(user_id, TextSendMessage(text="おすすめできるレシピが見つかりませんでした。"))
             return
 
-        await db.users.update_one(
-            {"_id": user_id},
-            {
-                "$set": {
-                    "current_recipe": {
-                        "name": recipe.name,
-                        "cooking_time": recipe.cooking_time,
-                        "ingredients": [ing.model_dump() for ing in recipe.ingredients],
-                        "servings": recipe.servings,
-                        "recipe_img_url": recipe.recipe_img_url,
-                        "recipe_url": recipe.recipe_url,
-                        "steps": [step.model_dump() for step in recipe.steps],
-                    },
-                    "current_step": 1,
-                    "updated_at": datetime.utcnow(),
-                }
-            },
-            upsert=True,
-        )
-
-        first_step = recipe.steps[0].instruction
+        first_step = recipe["steps"][0]["instruction"] if recipe.get("steps") else ""
         reply = (
-            f"今回作る料理は、\u300c{recipe.servings}\u300dの料理です！頑張りましょう！\n"
+            f"今回作る料理は、\u300c{recipe.get('servings')}\u300dの料理です！頑張りましょう！\n"
             f"ステップ1：{first_step}\nこの工程が終わったら写真を送ってください📸"
         )
         line_bot_api.push_message(user_id, TextSendMessage(text=reply))
