@@ -24,7 +24,7 @@ class StepItem(BaseModel):
 # ===============================
 class AvailableIngredient(BaseModel):
     name: str = Field(..., description="食材名（例: キャベツ）")
-    amount: float = Field(..., description="数量（例: 100）")
+    quantity: float = Field(..., description="数量（例: 100）")
     unit: str = Field(..., description="単位（例: g, ml）")
 
 class RequiredIngredient(BaseModel):

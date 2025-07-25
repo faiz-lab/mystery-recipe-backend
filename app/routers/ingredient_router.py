@@ -124,14 +124,3 @@ async def get_ingredients(
 class IngredientRegisterRequest(BaseModel):
     user_id: str
     ingredients: List[InventoryItem]
-
-
-@router.post("/register")
-async def register_ingredients(req: IngredientRegisterRequest):
-    """Register user's available ingredients."""
-    await db.users.update_one(
-        {"_id": req.user_id},
-        {"$set": {"inventory": [item.model_dump() for item in req.ingredients], "updated_at": datetime.utcnow()}},
-        upsert=True,
-    )
-    return {"success": True}
