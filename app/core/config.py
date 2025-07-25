@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     LINE_CHANNEL_ACCESS_TOKEN: str = ""
     LINE_CHANNEL_SECRET: str = ""
 
+    FRONTEND_URL: str = ""
+
     class Config:
         env_file = f".env.{os.getenv('ENVIRONMENT', 'development')}"
         env_file_encoding = 'utf-8'

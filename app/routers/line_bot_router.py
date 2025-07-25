@@ -1,8 +1,8 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Response
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, ImageMessage, TextSendMessage
-from datetime import datetime
+from datetime import datetime, timezone
 import asyncio
 import base64
 import logging
@@ -34,15 +34,11 @@ async def reply_message_async(reply_token: str, text: str):
     """异步回复用户"""
     await asyncio.to_thread(line_bot_api.reply_message, reply_token, TextSendMessage(text=text))
 
-# ======================
-# 通知接口
-# ======================
-@router.post("/notify")
-async def notify_line(data: dict):
-    user_id = data.get("user_id")
-    message = data.get("message", "登録完了")
-    await send_message_async(user_id, message)
-    return {"status": "ok"}
+def safe_task(coro):
+    """包装 create_task, 捕获异常"""
+    task = asyncio.create_task(coro)
+    task.add_done_callback(lambda t: logger.error(f"Task exception: {t.exception()}") if t.exception() else None)
+    return task
 
 # ======================
 # 回调接口（LINE Webhook）
@@ -55,7 +51,7 @@ async def callback(request: Request):
         handler.handle(body.decode(), signature)
     except InvalidSignatureError:
         logger.error("Invalid LINE signature")
-        return {"error": "Invalid signature"}
+        return Response(content="Invalid signature", status_code=400)
     return {"status": "ok"}
 
 # ======================
@@ -63,12 +59,13 @@ async def callback(request: Request):
 # ======================
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
-    asyncio.create_task(process_text(event.source.user_id, event.message.text.strip(), event.reply_token))
+    safe_task(process_text(event.source.user_id, event.message.text.strip(), event.reply_token))
 
 async def process_text(user_id: str, text: str, reply_token: str):
     try:
         if text == COMMAND_REGISTER:
-            await send_message_async(user_id, f"こちらから登録ページを開いてください👇\nhttps://your-ui-domain?user_id={user_id}")
+            link_url = f"{settings.FRONTEND_URL}?user_id={user_id}"
+            await send_message_async(user_id, f"こちらから登録ページを開いてください👇\n\n{link_url}")
             return
 
         if text in (COMMAND_START, "登録完了"):
@@ -79,7 +76,10 @@ async def process_text(user_id: str, text: str, reply_token: str):
             await handle_next_step(user_id)
             return
 
-        await send_message_async(user_id, '「食材を登録する」「スタート」「次へ」のいずれかを送信してください。')
+        await send_message_async(
+            user_id,
+            "以下のコマンドから選んでください👇\n✅ 食材を登録する\n✅ スタート\n✅ 次へ"
+        )
 
     except Exception as e:
         logger.exception(f"Error processing text: {e}")
@@ -103,8 +103,10 @@ async def handle_start(user_id: str):
         f"ステップ1: {first_step}\nこの工程が終わったら写真を送ってください📸"
     )
 
-    # 初始化 current_step = 1
-    await db.users.update_one({"_id": user_id}, {"$set": {"current_step": 1, "updated_at": datetime.now()}})
+    await db.users.update_one(
+        {"_id": user_id},
+        {"$set": {"current_step": 1, "updated_at": datetime.now(timezone.utc)}}
+    )
     await send_message_async(user_id, reply)
 
 # ======================
@@ -133,7 +135,10 @@ async def handle_next_step(user_id: str):
     step_text = recipe["steps"][step_index]["instruction"]
     trivia_task = asyncio.create_task(generate_trivia(step_text))
     update_task = asyncio.create_task(
-        db.users.update_one({"_id": user_id}, {"$set": {"current_step": step_index + 1, "updated_at": datetime.now()}})
+        db.users.update_one(
+            {"_id": user_id},
+            {"$set": {"current_step": step_index + 1, "updated_at": datetime.now(timezone.utc)}}
+        )
     )
     trivia, _ = await asyncio.gather(trivia_task, update_task)
 
@@ -145,7 +150,7 @@ async def handle_next_step(user_id: str):
 # ======================
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image(event):
-    asyncio.create_task(process_image(event.source.user_id, event.message.id, event.reply_token))
+    safe_task(process_image(event.source.user_id, event.message.id, event.reply_token))
 
 async def process_image(user_id: str, message_id: str, reply_token: str):
     try:
@@ -158,10 +163,12 @@ async def process_image(user_id: str, message_id: str, reply_token: str):
 
         step_index = max(user.get("current_step", 1) - 1, 0)
         recipe = user["current_recipe"]
+        recipe_name = recipe.get("name", "不明な料理")
+        recipe_url = recipe.get("recipe_url", "")
 
         # 只传递当前步骤及前一步，减少 token 消耗
         relevant_steps = recipe["steps"][max(0, step_index - 1): step_index + 1]
-        instructions = "\n".join([f"ステップ{i+1}: {s['instruction']}" for i, s in enumerate(relevant_steps)])
+        instructions = "\n".join([f"ステップ{s['step_no']}: {s['instruction']}" for s in relevant_steps])
 
         # 下载图片并转 base64
         content = line_bot_api.get_message_content(message_id)
@@ -176,11 +183,21 @@ async def process_image(user_id: str, message_id: str, reply_token: str):
                 next_step_text = recipe["steps"][next_index]["instruction"]
                 trivia = await generate_trivia(next_step_text)
 
-                reply = f"✅ OK！\nステップ{next_index + 1}: {next_step_text}" + (f"\n\n🧠 うんちく:\n{trivia}" if trivia else "")
-                await db.users.update_one({"_id": user_id}, {"$set": {"current_step": next_index + 1, "updated_at": datetime.utcnow()}})
+                reply = f"✅ OK! 合っていそうです!\n\nステップ{next_index + 1}: {next_step_text}" + (f"\n\n🧠 うんちく:\n{trivia}" if trivia else "")
+                await db.users.update_one(
+                    {"_id": user_id},
+                    {"$set": {"current_step": next_index + 1, "updated_at": datetime.now(timezone.utc)}}
+                )
             else:
-                reply = "🎉 料理が完成しました！"
-                await db.users.update_one({"_id": user_id}, {"$set": {"current_step": next_index + 1, "updated_at": datetime.utcnow()}})
+                reply = (
+                    "🎉 全てのステップが完了しました！お疲れ様でした。\n\n"
+                    f"今回作った料理名は「{recipe_name}」でした！\n\n"
+                    f"レシピURLはこちら👇\n{recipe_url}"
+                )
+                await db.users.update_one(
+                    {"_id": user_id},
+                    {"$set": {"current_step": next_index + 1, "updated_at": datetime.now(timezone.utc)}}
+                )
         else:
             reply = "😅 画像が手順と合っていないようです。"
 
