@@ -47,10 +47,14 @@ async def recommend_recipes(req: RecipeRecommendationRequest):
             first_step = recipe_data["steps"][0]["instruction"]
             servings = recipe_data.get("servings", "不明")
             message = (
-                f"今回作る料理は『{servings}』の料理です！頑張りましょう！\n\n"
+                f"ピッタリのレシピが見つかりました！\n\n今回作る料理は『{servings}』の料理です！頑張りましょう💪！\n\n"
                 f"ステップ1: {first_step}\n\nこの工程が終わったら写真を送ってください📸"
             )
-
+            # ✅ 更新 current_step（表示用户完成第0步，下一次是第1步）
+            await db.users.update_one(
+                {"_id": req.user_id},
+                {"$set": {"current_step": 1, "updated_at": datetime.now(timezone.utc)}}
+            )
             await send_message_async(req.user_id, message)
         except Exception as e:  # LINE 推送失败不影响主逻辑
             print(f"[LINE Push Error] user_id={req.user_id}, error={e}")
