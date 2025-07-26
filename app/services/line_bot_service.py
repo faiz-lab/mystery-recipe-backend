@@ -20,8 +20,7 @@ async def generate_trivia(next_step_text: str) -> str:
                     "role": "user",
                     "content": f"""
                     以下の料理手順で、メインで使用する食材に関する面白い豆知識を1文で教えてください。
-                    暇ならおすすめの音楽も教えてください。
-                    もしこの工程が忙しい場合、「今回は暇ではない」と答えてください。
+                    おすすめの音楽も教えてください。
 
                     手順：
                     {next_step_text}
