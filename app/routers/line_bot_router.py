@@ -40,6 +40,15 @@ def safe_task(coro):
     task.add_done_callback(lambda t: logger.error(f"Task exception: {t.exception()}") if t.exception() else None)
     return task
 
+async def append_trivia_if_valid(messages, step_text):
+    """生成 Trivia 并附加到消息列表（排除无效值）"""
+    try:
+        trivia = await generate_trivia(step_text)
+        if trivia and "今回は暇ではない" not in trivia:
+            messages.append(TextSendMessage(text=f"🧠 うんちく:\n{trivia}"))
+    except Exception as e:
+        logger.error(f"[Trivia Error] {e}")
+
 # ======================
 # 回调接口（LINE Webhook）
 # ======================
@@ -133,17 +142,22 @@ async def handle_next_step(user_id: str):
         return
 
     step_text = recipe["steps"][step_index]["instruction"]
-    trivia_task = asyncio.create_task(generate_trivia(step_text))
+
+    # 更新数据库 + 准备消息
     update_task = asyncio.create_task(
         db.users.update_one(
             {"_id": user_id},
             {"$set": {"current_step": step_index + 1, "updated_at": datetime.now(timezone.utc)}}
         )
     )
-    trivia, _ = await asyncio.gather(trivia_task, update_task)
 
-    reply = f"ステップ{step_index + 1}: {step_text}" + (f"\n\n🧠 うんちく:\n{trivia}" if trivia else "")
-    await send_message_async(user_id, reply)
+    messages = [
+        TextSendMessage(text=f"📝 手動で次のステップに進みます。\n\nステップ{step_index + 1}: {step_text}\n終わったら写真を送ってください📸")
+    ]
+    await append_trivia_if_valid(messages, step_text)
+
+    await update_task
+    await asyncio.to_thread(line_bot_api.push_message, user_id, messages)
 
 # ======================
 # 图片消息处理
@@ -166,11 +180,9 @@ async def process_image(user_id: str, message_id: str, reply_token: str):
         recipe_name = recipe.get("name", "不明な料理")
         recipe_url = recipe.get("recipe_url", "")
 
-        # 只传递当前步骤及前一步，减少 token 消耗
         relevant_steps = recipe["steps"][max(0, step_index - 1): step_index + 1]
         instructions = "\n".join([f"ステップ{s['step_no']}: {s['instruction']}" for s in relevant_steps])
 
-        # 下载图片并转 base64
         content = line_bot_api.get_message_content(message_id)
         image_bytes = b"".join(chunk for chunk in content.iter_content())
         base64_image = base64.b64encode(image_bytes).decode("utf-8")
@@ -181,13 +193,18 @@ async def process_image(user_id: str, message_id: str, reply_token: str):
             next_index = step_index + 1
             if next_index < len(recipe["steps"]):
                 next_step_text = recipe["steps"][next_index]["instruction"]
-                trivia = await generate_trivia(next_step_text)
 
-                reply = f"✅ OK! 合っていそうです!\n\nステップ{next_index + 1}: {next_step_text}" + (f"\n\n🧠 うんちく:\n{trivia}" if trivia else "")
+                messages = [
+                    TextSendMessage(text=f"✅ OK! 合っていそうです!\n\nステップ{next_index + 1}: {next_step_text}\n終わったら写真を送ってください📸")
+                ]
+                await append_trivia_if_valid(messages, next_step_text)
+
                 await db.users.update_one(
                     {"_id": user_id},
                     {"$set": {"current_step": next_index + 1, "updated_at": datetime.now(timezone.utc)}}
                 )
+                await asyncio.to_thread(line_bot_api.push_message, user_id, messages)
+
             else:
                 reply = (
                     "🎉 全てのステップが完了しました！お疲れ様でした。\n\n"
@@ -198,10 +215,10 @@ async def process_image(user_id: str, message_id: str, reply_token: str):
                     {"_id": user_id},
                     {"$set": {"current_step": next_index + 1, "updated_at": datetime.now(timezone.utc)}}
                 )
+                await send_message_async(user_id, reply)
         else:
             reply = "😅 画像が手順と合っていないようです。"
-
-        await send_message_async(user_id, reply)
+            await send_message_async(user_id, reply)
 
     except Exception as e:
         logger.exception(f"Error processing image: {e}")
