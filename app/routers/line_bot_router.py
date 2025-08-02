@@ -68,11 +68,32 @@ async def callback(request: Request):
 # ======================
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
-    safe_task(process_text(event.source.user_id, event.message.text.strip(), event.reply_token))
+    safe_task(process_text(event.source.user_id, event.message.text.strip()))
 
-async def process_text(user_id: str, text: str, reply_token: str):
+async def process_text(user_id: str, text: str):
     try:
         if text == COMMAND_REGISTER:
+            # ✅ 新增：用户不存在时自动初始化
+            user = await db.users.find_one({"_id": user_id})
+            if not user:
+                default_inventory = [
+                    {"name": "豚バラ肉", "quantity": 150, "unit": "g"},
+                    {"name": "ピーマン", "quantity": 70, "unit": "g"},
+                    {"name": "キャベツ", "quantity": 300, "unit": "g"},
+                    {"name": "長ねぎ", "quantity": 10, "unit": "g"},
+                    {"name": "すりおろし生姜", "quantity": 10, "unit": "g"},
+                    {"name": "豆板醤", "quantity": 10, "unit": "g"},
+                    {"name": "甜麺醤", "quantity": 20, "unit": "g"},
+                    {"name": "しょうゆ", "quantity": 10, "unit": "ml"},
+                    {"name": "料理酒", "quantity": 10, "unit": "ml"},
+                    {"name": "ごま油", "quantity": 10, "unit": "g"},
+                ]
+                await db.users.insert_one({
+                    "_id": user_id,
+                    "inventory": default_inventory,
+                    "created_at": datetime.now(timezone.utc),
+                    "updated_at": datetime.now(timezone.utc)
+                })
             link_url = f"{settings.FRONTEND_URL}?user_id={user_id}"
             await send_message_async(user_id, f"こちらから登録ページを開いてください👇\n\n{link_url}")
             return
